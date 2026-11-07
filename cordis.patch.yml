@@ -1,0 +1,9 @@
+# dsh-ui-designer bundle patch
+#
+# One host row. The browser bundle is declared by package.json's `dsh.client`
+# and served by @deepseek-ai/dsh-client-modules. No session preset is needed:
+# designs are ordinary JSON files in the selected workspace.
+- insert:
+    - id: ui-designer
+      name: 'dsh-ui-designer'
+      config: {}

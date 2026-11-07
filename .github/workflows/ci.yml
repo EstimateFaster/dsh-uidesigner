@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Build client bundle
+        run: node build.mjs
+      - name: Fail if the committed bundle is stale
+        run: |
+          if ! git diff --quiet -- lib/client.js; then
+            echo "lib/client.js is out of date with src/client/*.js — run 'npm run build' and commit the result."
+            git diff --stat -- lib/client.js
+            exit 1
+          fi
+      - name: Host tests
+        run: node --test test/host.test.mjs

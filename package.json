@@ -1,0 +1,68 @@
+{
+  "name": "dsh-ui-designer",
+  "version": "0.1.0",
+  "description": "A Figma/Canva-like visual UI designer for DSH Web: ratio and wearable canvases, built-in components, workspace JSON persistence, PNG/SVG export.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "ui-designer",
+    "figma",
+    "canvas",
+    "design-tool",
+    "wearable"
+  ],
+  "homepage": "https://github.com/EstimateFaster/dsh-uidesigner#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EstimateFaster/dsh-uidesigner.git"
+  },
+  "bugs": {
+    "url": "https://github.com/EstimateFaster/dsh-uidesigner/issues"
+  },
+  "author": "dsh-ui-designer contributors",
+  "private": true,
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./docs/*": "./docs/*"
+  },
+  "files": [
+    "lib",
+    "src",
+    "test",
+    "locale",
+    "docs",
+    "examples",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "build.mjs"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

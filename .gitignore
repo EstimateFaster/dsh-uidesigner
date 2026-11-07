@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# design files saved by the plugin when this repo is used as a workspace
+.dsh-ui-designer/
+
+# logs and OS noise
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# editor / tooling
+.idea/
+.vscode/
+*.swp
+.cache/
+
+# test artifacts
+test/tmp/
+coverage/
+.tmp/

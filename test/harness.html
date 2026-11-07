@@ -1,0 +1,1003 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UI Designer harness</title>
+  <!-- Test-only copy of the DSH theme tokens (see test/vendor/dsh-theme-tokens.css). -->
+  <link rel="stylesheet" href="vendor/dsh-theme-tokens.css" />
+  <style>
+    html, body, #app { margin: 0; width: 100%; height: 100%; }
+    body { background: #eef1f7; overflow: hidden; }
+    #results { position: fixed; left: 8px; bottom: 8px; z-index: 99999; background: #111; color: #9f9; padding: 8px; font: 11px monospace; max-width: 80vw; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="results">running</pre>
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
+  <script>
+    window.__ModuleLoader__ = {
+      load(record) {
+        window.__UID_PLUGIN__ = record
+      },
+    }
+  </script>
+  <script src="../lib/client.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search)
+    const stage = params.get('stage')
+    const clean = params.get('clean') === '1'
+    if (clean) document.getElementById('results').style.display = 'none'
+    const results = []
+    const errors = []
+    window.addEventListener('error', (event) => errors.push(String(event.message || event.error)))
+    window.addEventListener('unhandledrejection', (event) => errors.push('rejection: ' + String(event.reason && event.reason.stack || event.reason)))
+    const originalError = console.error
+    console.error = function (...args) {
+      errors.push('console.error: ' + args.map(String).join(' '))
+      originalError.apply(console, args)
+    }
+
+    function line(text) {
+      results.push(text)
+      document.getElementById('results').textContent = results.join('\n')
+    }
+
+    function wait(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms))
+    }
+
+    function click(element) {
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+    }
+
+    async function main() {
+      const record = window.__UID_PLUGIN__
+      if (!record) throw new Error('client bundle did not register a module factory')
+      line('module: ' + record.id)
+      const factory = record.factory
+      const mod = factory((name) => {
+        if (name === 'react') return React
+        throw new Error('unexpected require: ' + name)
+      })
+      line('exports: ' + Object.keys(mod).join(','))
+
+      const workspaces = [{ id: 'w1', title: 'dsh-plugin-uidesigner', path: 'mock-workspace/dsh-plugin-uidesigner', updatedAt: new Date().toISOString() }]
+      let designs = []
+      if (params.get('designs') === '1') {
+        designs = [
+          { file: '专注-手机首页-c1eb4643.json', id: 'uid_demo_phone', title: '专注 · 手机首页', version: 1, canvas: { width: 390, height: 844, background: '#FFFFFF', background2: '', radius: 44, deviceType: 'phone' }, nodeCount: 18, updatedAt: new Date(Date.now() - 1000 * 60 * 12).toISOString(), size: 6200 },
+          { file: '小米手环表盘-68404e86.json', id: 'uid_demo_band', title: '手环表盘 · 今日', version: 1, canvas: { width: 192, height: 490, background: '#05070C', background2: '#101A2E', gradientAngle: 160, radius: 48, deviceType: 'wearable' }, nodeCount: 8, updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString(), size: 4100 },
+          { file: 'SaaS-数据概览-f61a452c.json', id: 'uid_demo_desktop', title: 'SaaS 数据概览', version: 1, canvas: { width: 1440, height: 900, background: '#0B1020', background2: '#172554', gradientAngle: 130, radius: 0, deviceType: 'desktop' }, nodeCount: 26, updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(), size: 9800 },
+          { file: '品牌发布海报-a91b52de.json', id: 'uid_demo_poster', title: '品牌发布海报 · Make it real', version: 1, canvas: { width: 1080, height: 1080, background: '#4C1D95', background2: '#DB2777', gradientAngle: 135, radius: 0, deviceType: 'custom' }, nodeCount: 12, updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString(), size: 5300 },
+        ]
+      }
+      let savedPayload = null
+      let exportPayload = null
+      let svgPayload = null
+      let rpcCalls = []
+      const mockRpc = async (endpoint, payload) => {
+        rpcCalls.push(endpoint)
+        if (endpoint === 'status') return { ok: true, value: { workspaces, preferredWorkspaceId: 'w1', limits: {} } }
+        if (endpoint === 'design/list') return { ok: true, value: { workspace: workspaces[0], designs, invalid: 0 } }
+        if (endpoint === 'design/save') {
+          savedPayload = payload
+          const file = payload.file || 'saved-' + String(payload.document.id).slice(-8) + '.json'
+          designs = [{
+            file, id: payload.document.id, title: payload.document.title, version: 1,
+            canvas: payload.document.canvas, nodeCount: payload.document.nodes.length,
+            updatedAt: new Date().toISOString(), size: 1000,
+          }]
+          return { ok: true, value: {
+            file, relativePath: '.dsh-ui-designer/' + file,
+            path: '/tmp/' + file, document: { id: payload.document.id, file, createdAt: payload.document.createdAt, updatedAt: new Date().toISOString() },
+            design: designs[0], workspace: workspaces[0],
+          } }
+        }
+        if (endpoint === 'design/load') {
+          return { ok: true, value: { document: savedPayload.document, file: savedPayload.file, relativePath: '.dsh-ui-designer/x.json', updatedAt: new Date().toISOString(), workspace: workspaces[0] } }
+        }
+        if (endpoint === 'design/export') {
+          exportPayload = payload
+          return { ok: true, value: { file: payload.name, relativePath: '.dsh-ui-designer/exports/' + payload.name, path: '/tmp/' + payload.name, format: payload.format, bytes: 100 } }
+        }
+        if (endpoint === 'design/delete') { designs = []; return { ok: true, value: { deleted: true } } }
+        return { ok: false, error: { code: 'mock/unknown', message: 'unknown ' + endpoint, details: {} } }
+      }
+
+      const captured = {}
+      const disposers = []
+      const ctx = {
+        effect(fn) {
+          const dispose = fn()
+          if (typeof dispose === 'function') disposers.push(dispose)
+          return () => {}
+        },
+        locale: {
+          register() { return () => {} },
+          bind() { return (key) => ({ panel: 'UI 设计器' }[key] || key) },
+        },
+        slots: {
+          inject(name, callback) {
+            const result = callback()
+            if (typeof result === 'function') disposers.push(result)
+          },
+          register(options, component) {
+            captured[options.name + '|' + (options.key || options.id || '')] = { options, component }
+            return () => {}
+          },
+        },
+        connection: {
+          rpc: {
+            call: async (channel, endpoint, payload) => {
+              if (channel !== '/api' || endpoint !== 'ui-designer') throw new Error('bad target ' + channel + '/' + endpoint)
+              return mockRpc(payload.endpoint, payload.payload)
+            },
+          },
+        },
+      }
+      mod.apply(ctx)
+      line('main registered: ' + Boolean(captured['main|ui-designer']))
+      line('sidebar registered: ' + Boolean(captured['sidebar.panellist|ui-designer']))
+      if (!captured['main|ui-designer']) throw new Error('main panel was not registered')
+
+      if (params.get('dark') === '1') document.body.setAttribute('data-ds-dark-theme', '')
+      const safe = params.get('safe') === '1'
+      if (safe) {
+        /* Simulate the DSH window chrome: the macOS frame reserves the top
+         * strip and, while the sidebar is collapsed, publishes the inline
+         * clearance occupied by the reopen / New Session controls. */
+        document.documentElement.style.setProperty('--dsh-frame-leading-clearance', '160px')
+        document.documentElement.style.setProperty('--dsh-frame-top-clearance', '48px')
+      }
+
+      document.body.style.background = '#eef1f7'
+      const forcedWidth = Number(params.get('w'))
+      if (Number.isFinite(forcedWidth) && forcedWidth > 0) {
+        const app = document.getElementById('app')
+        app.style.width = forcedWidth + 'px'
+        app.style.height = '900px'
+        app.style.margin = '0 auto'
+      }
+      ReactDOM.createRoot(document.getElementById('app')).render(React.createElement(captured['main|ui-designer'].component))
+      await wait(500)
+      line('start screen: ' + Boolean(document.querySelector('.uid-start')))
+      line('template cards: ' + document.querySelectorAll('.uid-template-card').length)
+      if (!document.querySelector('.uid-start')) throw new Error('start screen did not render')
+      if (params.get('menu') === '1' && stage !== 'layout') {
+        const rootRect = document.querySelector('.uid-root').getBoundingClientRect()
+        const seat = document.createElement('div')
+        seat.id = 'dsh-menu-seat'
+        seat.setAttribute('aria-hidden', 'true')
+        seat.style.cssText = `position:fixed;left:${Math.round(rootRect.left + 8)}px;top:${Math.round(rootRect.top + 8)}px;width:40px;height:40px;border-radius:50%;background:var(--dsw-alias-bg-base);box-shadow:0 1px 3px rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;z-index:99999`
+        seat.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>'
+        document.body.appendChild(seat)
+      }
+      if (params.get('scroll') === 'templates') {
+        document.querySelector('.uid-home-templates').scrollIntoView({ block: 'start' })
+        await wait(200)
+      }
+      if (stage === 'basic') {
+        const tabs = Array.from(document.querySelectorAll('.uid-device-tab'))
+        const phoneTab = tabs.find((tab) => tab.textContent.trim() === '手机')
+        if (phoneTab) click(phoneTab)
+        await wait(200)
+        const size = Array.from(document.querySelectorAll('.uid-size-card')).find((el) => el.textContent.includes('360'))
+        if (!size) throw new Error('360 canvas preset missing')
+        click(size)
+        await wait(900)
+        const setField = (label, value) => {
+          const field = Array.from(document.querySelectorAll('.uid-field')).find((el) => (el.querySelector('.uid-field-label') || {}).textContent === label)
+          const input = field && field.querySelector('input')
+          if (!input) return false
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+          setter.call(input, String(value))
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          return true
+        }
+        const add = async (id, x, y) => {
+          const card = document.querySelector('[data-component-id="' + id + '"]')
+          if (!card) throw new Error('component missing ' + id)
+          click(card)
+          await wait(160)
+          setField('X', x)
+          await wait(60)
+          setField('Y', y)
+          await wait(90)
+        }
+        await add('heading', 20, 50)
+        await add('text', 20, 150)
+        await add('button', 20, 250)
+        await add('input', 20, 340)
+        await add('card', 20, 430)
+        await add('divider', 20, 720)
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        await wait(200)
+        line('basic canvas: ' + (document.querySelector('.uid-stage-info') ? document.querySelector('.uid-stage-info').textContent : 'none'))
+        line('basic nodes: ' + document.querySelectorAll('.uid-node').length)
+        line('basic selected: ' + Boolean(document.querySelector('.uid-selection')))
+        line('basic errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'states') {
+        const panel = document.createElement('div')
+        panel.className = 'uid-root'
+        panel.style.cssText = 'position:fixed;inset:0;z-index:99990;padding:40px;overflow:auto;background:var(--uid-color-bg);display:block;height:auto'
+        const states = [
+          ['rest', ''],
+          ['hover', 'is-hover'],
+          ['focus', 'is-focus'],
+          ['pressed', 'is-pressed'],
+          ['disabled', 'is-disabled'],
+          ['selected', 'is-selected'],
+        ]
+        const cells = states.map(([label, cls]) =>
+          '<div style="display:flex;flex-direction:column;gap:12px;align-items:flex-start">' +
+            '<span style="font-size:var(--uid-font-caption);color:var(--uid-color-text-3)">' + label + '</span>' +
+            '<button class="uid-btn ' + cls + '">按钮 ' + label + '</button>' +
+            '<button class="uid-toolbtn ' + cls + '">工具</button>' +
+            '<button class="uid-iconbtn ' + cls + '"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>' +
+            '<input class="uid-input ' + cls + '" value="' + label + '" />' +
+            '<button class="uid-tab ' + cls + '">页签</button>' +
+          '</div>',
+        ).join('')
+        panel.innerHTML =
+          '<div style="max-width:1180px;margin:0 auto">' +
+            '<h1 style="font-size:var(--uid-font-heading);line-height:var(--uid-line-heading);margin:0 0 8px">控件状态层 / control state layers</h1>' +
+            '<p style="font-size:var(--uid-font-body);color:var(--uid-color-text-3);margin:0 0 28px">rest · hover · focus-visible · pressed · disabled · selected — DSH state tokens + M3 layer semantics</p>' +
+            '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:22px">' + cells + '</div>' +
+          '</div>'
+        document.body.appendChild(panel)
+        await wait(200)
+        const btn = (cls) => panel.querySelector('.uid-btn.' + cls)
+        const transparent = (value) => !value || value === 'rgba(0, 0, 0, 0)' || value === 'transparent'
+        const checks = [
+          ['hover', !transparent(getComputedStyle(btn('is-hover')).backgroundColor)],
+          ['disabled', Math.abs(parseFloat(getComputedStyle(btn('is-disabled')).opacity) - 0.38) < 0.02],
+          ['focus', parseFloat(getComputedStyle(btn('is-focus')).outlineWidth) >= 2],
+          ['pressed', !transparent(getComputedStyle(btn('is-pressed')).backgroundColor)],
+          ['selected', !transparent(getComputedStyle(btn('is-selected')).backgroundColor)],
+        ]
+        line('states checks: ' + checks.filter(([, ok]) => ok).length + '/' + checks.length)
+        checks.filter(([, ok]) => !ok).forEach(([key]) => line('states FAIL ' + key))
+        line('states gallery: true')
+        line('states errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'gallery') {
+        const debug = mod.__uiDesignerDebug
+        if (!debug) throw new Error('control spec debug bridge missing')
+        const phoneCanvas = { width: 390, height: 844, deviceType: 'phone' }
+        const watchCanvas = { width: 336, height: 480, deviceType: 'wearable' }
+        const darkIds = ['ring', 'weather', 'wear-time', 'wear-heart', 'wear-steps', 'wear-notice', 'wear-button']
+        const items = debug.componentIds.map((id) => {
+          const canvas = id.startsWith('wear-') ? watchCanvas : phoneCanvas
+          const node = debug.build(id, canvas)
+          node.x = 0
+          node.y = 0
+          const svg = debug.svg({
+            id: 'gallery-' + id,
+            title: id,
+            canvas: { width: node.w, height: node.h, background: '#FFFFFF', background2: '', radius: 0, deviceType: canvas.deviceType },
+            nodes: [node],
+          }, { transparent: true })
+          const role = debug.roles[debug.components[id].role]
+          const dark = darkIds.includes(id)
+          return '<div style="display:flex;flex-direction:column;gap:8px;min-width:0">' +
+            '<div style="height:120px;display:flex;align-items:center;justify-content:center;border:1px solid var(--uid-color-border);border-radius:var(--uid-radius-sm);background:' + (dark ? 'var(--dsw-static-neutral-bluish-1000)' : 'var(--uid-color-card)') + ';overflow:hidden;padding:8px">' +
+              '<img alt="' + id + '" style="max-width:100%;max-height:104px;object-fit:contain" src="data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg) + '" />' +
+            '</div>' +
+            '<span style="font-size:var(--uid-font-label);color:var(--uid-color-text);font-weight:var(--uid-weight-medium)">' + id + '</span>' +
+            '<span style="font-size:var(--uid-font-caption);color:var(--uid-color-text-3)">' + debug.components[id].role + ' · ' + role.type + ' · ' + role.shape + '</span>' +
+          '</div>'
+        }).join('')
+        const panel = document.createElement('div')
+        panel.className = 'uid-root'
+        panel.style.cssText = 'position:fixed;inset:0;z-index:99990;padding:28px 36px 36px;overflow:auto;background:var(--uid-color-bg);display:block;height:auto'
+        panel.innerHTML =
+          '<div style="max-width:1320px;margin:0 auto">' +
+            '<h1 style="font-size:var(--uid-font-heading);line-height:var(--uid-line-heading);margin:0 0 6px">29 个内置控件 / control gallery</h1>' +
+            '<p style="font-size:var(--uid-font-body);color:var(--uid-color-text-3);margin:0 0 22px">同一 CONTROL 规范表派生；色块仅用于深色控件预览。</p>' +
+            '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px">' + items + '</div>' +
+          '</div>'
+        document.body.appendChild(panel)
+        await wait(300)
+        line('gallery items: ' + debug.componentIds.length)
+        line('gallery errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'homecheck') {
+        const start = document.querySelector('.uid-start')
+        line('home overflow: ' + (start.scrollWidth - start.clientWidth))
+        line('home preset tabs: ' + document.querySelectorAll('.uid-device-tab').length)
+        line('home preset tiles: ' + document.querySelectorAll('.uid-size-card').length)
+        line('home recent rows: ' + document.querySelectorAll('.uid-recent-row').length)
+        const tabs = Array.from(document.querySelectorAll('.uid-device-tab'))
+        const phoneTab = tabs.find((tab) => tab.textContent.trim() === '手机')
+        if (phoneTab) click(phoneTab)
+        await wait(200)
+        line('home phone tiles: ' + document.querySelectorAll('.uid-size-card').length)
+        const firstTile = document.querySelector('.uid-size-card')
+        click(firstTile)
+        await wait(900)
+        line('home create workbench: ' + Boolean(document.querySelector('.uid-workbench')))
+        line('home create canvas: ' + (document.querySelector('.uid-stage-info') ? document.querySelector('.uid-stage-info').textContent : 'none'))
+        const brand = document.querySelector('.uid-brand')
+        click(brand)
+        await wait(500)
+        line('home return: ' + Boolean(document.querySelector('.uid-start')))
+        const search = document.querySelector('.uid-home-search input')
+        if (search) {
+          const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+          setValue.call(search, '未命名')
+          search.dispatchEvent(new Event('input', { bubbles: true }))
+          await wait(300)
+          line('home search rows: ' + document.querySelectorAll('.uid-recent-row').length)
+        }
+        line('home errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'start') { line('DONE'); return }
+
+      const templateCards = Array.from(document.querySelectorAll('.uid-template-card'))
+      const template = templateCards[Number(params.get('template') || 0)] || templateCards[0]
+      click(template)
+      await wait(900)
+      line('workbench: ' + Boolean(document.querySelector('.uid-workbench')))
+      line('artboard: ' + Boolean(document.querySelector('.uid-artboard')))
+      const nodeCount = document.querySelectorAll('.uid-node').length
+      line('nodes rendered: ' + nodeCount)
+      if (!document.querySelector('.uid-workbench') || nodeCount < 5) throw new Error('template did not render a populated canvas')
+      line('canvas aria: ' + (document.querySelector('.uid-stage-info') ? document.querySelector('.uid-stage-info').textContent : 'none'))
+      if (stage === 'layout') {
+        const rootRectForSeat = document.querySelector('.uid-root').getBoundingClientRect()
+        const seat = document.createElement('div')
+        seat.id = 'dsh-menu-seat'
+        seat.setAttribute('aria-hidden', 'true')
+        seat.style.cssText = `position:fixed;left:${Math.round(rootRectForSeat.left + 8)}px;top:${Math.round(rootRectForSeat.top + (safe ? 56 : 8))}px;width:40px;height:40px;border-radius:10px;background:#111;z-index:99999`
+        document.body.appendChild(seat)
+        const seatRect = seat.getBoundingClientRect()
+        const topbar = document.querySelector('.uid-topbar')
+        const controls = Array.from(topbar.querySelectorAll('button, input, select')).filter((el) => el.offsetParent !== null)
+        const overlaps = (a, b) => !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom)
+        const clashing = controls.filter((el) => overlaps(el.getBoundingClientRect(), seatRect))
+        const brand = document.querySelector('.uid-brand')
+        const brandVisible = Boolean(brand && brand.offsetParent !== null)
+        const first = brandVisible ? brand : controls[0]
+        const firstRect = first.getBoundingClientRect()
+        const hit = document.elementFromPoint(firstRect.left + firstRect.width / 2, firstRect.top + firstRect.height / 2)
+        line('layout root padding-top: ' + getComputedStyle(document.querySelector('.uid-root')).paddingTop)
+        line('layout topbar padding-left: ' + getComputedStyle(topbar).paddingLeft)
+        line('layout brand visible: ' + brandVisible)
+        line('layout seat: ' + JSON.stringify({ l: Math.round(seatRect.left), t: Math.round(seatRect.top), r: Math.round(seatRect.right), b: Math.round(seatRect.bottom) }))
+        line('layout controls: ' + controls.map((el) => (el.className || el.tagName) + '@' + Math.round(el.getBoundingClientRect().left)).join('|'))
+        line('layout overlaps: ' + clashing.length)
+        line('layout first control: ' + (first.className || first.tagName) + '@' + Math.round(firstRect.left))
+        line('layout click hit: ' + Boolean(hit && (hit === first || first.contains(hit))))
+        const rootRect = document.querySelector('.uid-root').getBoundingClientRect()
+        const maxRight = Math.max.apply(null, controls.map((el) => el.getBoundingClientRect().right))
+        line('layout content right: ' + Math.round(maxRight) + '/' + Math.round(rootRect.right))
+        line('layout errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'tokens') {
+        const chromeText = Array.from(document.querySelectorAll('.uid-root *')).filter((el) => {
+          if (el.closest('.uid-artboard')) return false
+          if (!el.offsetParent) return false
+          return el.textContent.trim().length > 0 && el.children.length === 0
+        })
+        const sizes = chromeText.map((el) => parseFloat(getComputedStyle(el).fontSize)).filter((n) => Number.isFinite(n))
+        const min = Math.min.apply(null, sizes)
+        const rootStyle = getComputedStyle(document.querySelector('.uid-root'))
+        line('tokens min font: ' + min)
+        line('tokens text sizes: ' + Array.from(new Set(sizes)).sort((a, b) => a - b).join(','))
+        line('tokens label primary: ' + rootStyle.getPropertyValue('--uid-color-text').trim())
+        line('tokens bg: ' + rootStyle.backgroundColor)
+        line('tokens resolved accent: ' + rootStyle.getPropertyValue('--uid-color-accent').trim() + ' -> ' + getComputedStyle(document.querySelector('.uid-tab.is-active')).color)
+        line('tokens below 12: ' + sizes.filter((n) => n < 12).length)
+        line('DONE')
+        return
+      }
+      if (stage === 'presetcheck') {
+        const artboard = () => document.querySelector('.uid-artboard')
+        const bg = () => getComputedStyle(artboard()).backgroundColor
+        const select = document.querySelector('.uid-inspector select')
+        const options = Array.from(select.options).map((option) => ({ value: option.value, text: option.textContent }))
+        const target = options.find((option) => option.value === 'mi-band-pro')
+        line('preset option: ' + (target ? target.text : 'missing'))
+        select.value = 'mi-band-pro'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+        await wait(400)
+        line('preset watch info: ' + document.querySelector('.uid-stage-info').textContent)
+        line('preset watch bg: ' + bg())
+        line('preset watch size: ' + artboard().style.width + ' x ' + artboard().style.height)
+        select.value = 'phone-390'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+        await wait(400)
+        line('preset phone bg: ' + bg())
+        line('preset errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'controlspec') {
+        const debug = mod.__uiDesignerDebug
+        if (!debug) throw new Error('control spec debug bridge missing')
+        const spec = debug.spec
+        const ids = debug.componentIds
+        const failures = []
+        const rows = []
+        const typeSizes = new Set()
+        for (const group of Object.values(spec.type)) for (const t of Object.values(group)) typeSizes.add(t.size)
+        const spaceValues = new Set(Object.values(spec.space))
+        const shapeValues = new Set(Object.values(spec.shape))
+        const strokeValues = new Set(Object.values(spec.stroke))
+        const isPhone = (canvas) => !(canvas.deviceType === 'wearable' || canvas.width <= 280)
+        const phoneCanvas = { width: 390, height: 844, deviceType: 'phone' }
+        const watchCanvas = { width: 336, height: 480, deviceType: 'wearable' }
+        const close = (a, b) => Math.abs(Number(a) - Number(b)) <= 0.75
+        const fail = (id, dim, expected, actual) => failures.push(`${id} | ${dim} | expected ${expected} | actual ${actual}`)
+        const deepestText = (el) => {
+          if (!el) return null
+          for (const child of el.childNodes) {
+            if (child.nodeType === 3 && child.textContent.trim()) return el
+            if (child.nodeType === 1) {
+              const found = deepestText(child)
+              if (found) return found
+            }
+          }
+          return null
+        }
+        const effective = (role, compact) => compact
+          ? { ...role, type: role.compactType || role.type, shape: role.compactShape || role.shape }
+          : role
+        const expect = (id, canvas) => {
+          const entry = spec.components[id]
+          const role = effective(spec.roles[entry.role], !isPhone(canvas))
+          const size = spec.sizes[entry.size]
+          const type = debug.type(role.type)
+          const factor = isPhone(canvas) ? 1 : 0.58
+          return {
+            entry,
+            role,
+            size,
+            type,
+            factor,
+            font: role.deviceRelative ? Math.round(canvas.width * size.fontRatio) : Math.round(type.size * factor),
+            radius: role.shape === 'full' ? 50 : Math.round(debug.shape(role.shape) * factor * 10) / 10,
+            stroke: role.stroke === 'glyph' ? Math.round(debug.stroke('glyph') * factor * 10) / 10 : role.stroke === 'none' ? 0 : Math.round(debug.stroke(role.stroke) * factor * 10) / 10,
+            pad: role.padX ? Math.round(debug.space(role.padX) * factor * 10) / 10 : 0,
+          }
+        }
+        const roleGroups = new Map()
+        for (const id of ids) {
+          const entry = spec.components[id]
+          const role = spec.roles[entry.role]
+          if (!role) { fail(id, 'role', 'defined', entry.role); continue }
+          if (!spec.sizes[entry.size]) { fail(id, 'size', 'defined', entry.size); continue }
+          if (!roleGroups.has(entry.role)) roleGroups.set(entry.role, [])
+          roleGroups.get(entry.role).push(id)
+
+          const phone = expect(id, phoneCanvas)
+          const node = debug.build(id, phoneCanvas)
+          const actualFont = node.fontSize || 0
+          const actualRadius = node.radius == null ? 0 : node.radius
+          const actualStroke = node.strokeWidth == null ? 0 : node.strokeWidth
+          if (!phone.role.deviceRelative && !close(actualFont, phone.font)) fail(id, 'node.font', phone.font, actualFont)
+          if (!close(actualRadius, phone.radius)) fail(id, 'node.radius', phone.radius, actualRadius)
+          if (!close(actualStroke, phone.stroke)) fail(id, 'node.stroke', phone.stroke, actualStroke)
+          rows.push({ id, role: entry.role, font: actualFont, radius: actualRadius, stroke: actualStroke, pad: phone.pad, gap: phone.role.gap ? debug.space(phone.role.gap) : 0, icon: phone.role.icon ? debug.icon(phone.role.icon) : 0, type: phone.role.type, shape: phone.role.shape })
+
+          const wearable = expect(id, watchCanvas)
+          const watchNode = debug.build(id, watchCanvas)
+          if (['wear-time', 'wear-heart', 'wear-steps', 'wear-notice', 'wear-button'].includes(id)) {
+            if (!wearable.role.deviceRelative && !close(watchNode.fontSize || 0, wearable.font)) fail(id, 'wearable.font', wearable.font, watchNode.fontSize || 0)
+            if (!close(watchNode.radius || 0, wearable.radius)) fail(id, 'wearable.radius', wearable.radius, watchNode.radius || 0)
+            if (!close(watchNode.strokeWidth || 0, wearable.stroke)) fail(id, 'wearable.stroke', wearable.stroke, watchNode.strokeWidth || 0)
+          }
+
+          const card = document.querySelector(`[data-component-id="${id}"]`)
+          if (!card) { fail(id, 'render', 'card present', 'missing'); continue }
+          click(card)
+          await wait(90)
+          const el = document.querySelector('.uid-node.is-selected')
+          if (!el) { fail(id, 'render', 'selected node', 'missing'); continue }
+          const textEl = deepestText(el)
+          const renderedFont = textEl ? parseFloat(getComputedStyle(textEl).fontSize) : null
+          const renderedRadius = parseFloat(getComputedStyle(el).borderTopLeftRadius)
+          const renderedStroke = parseFloat((el.style.border || '').match(/([0-9.]+)px/)?.[1] || 0)
+          const root = el.querySelector(':scope > div')
+          const svgEl = el.querySelector('svg')
+          const renderedPad = root && parseFloat(getComputedStyle(root).paddingLeft) > 0
+            ? parseFloat(getComputedStyle(root).paddingLeft)
+            : svgEl && svgEl.style.left
+              ? parseFloat(svgEl.style.left)
+              : 0
+          if (renderedFont != null && !close(renderedFont, actualFont)) fail(id, 'render.font', actualFont, renderedFont)
+          if (!close(renderedRadius, actualRadius)) fail(id, 'render.radius', actualRadius, renderedRadius)
+          if (phone.stroke > 0 && !role.stroke.includes('glyph') && !['divider', 'line', 'rule'].includes(entry.role) && !close(renderedStroke, actualStroke)) fail(id, 'render.stroke', actualStroke, renderedStroke)
+          if (phone.pad > 0 && !close(renderedPad, phone.pad)) fail(id, 'render.pad', phone.pad, renderedPad)
+          if (renderedFont != null && !typeSizes.has(renderedFont) && !phone.role.deviceRelative) fail(id, 'render.font.grade', [...typeSizes].join('/'), renderedFont)
+          if (!shapeValues.has(renderedRadius) && renderedRadius !== 50) fail(id, 'render.radius.grade', [...shapeValues].join('/'), renderedRadius)
+          if (phone.pad > 0 && !spaceValues.has(renderedPad)) fail(id, 'render.pad.grade', [...spaceValues].join('/'), renderedPad)
+          if (phone.stroke > 0 && !strokeValues.has(renderedStroke) && !['divider', 'line', 'rule'].includes(entry.role)) fail(id, 'render.stroke.grade', [...strokeValues].join('/'), renderedStroke)
+        }
+
+        for (const [roleId, members] of roleGroups.entries()) {
+          const role = spec.roles[roleId]
+          for (const id of members) {
+            const entry = spec.components[id]
+            if (entry.role !== roleId) fail(id, 'role.consistency', roleId, entry.role)
+          }
+          const effectiveTypes = new Set(members.map((id) => effective(role, !isPhone(phoneCanvas)).type))
+          const effectiveShapes = new Set(members.map((id) => effective(role, false).shape))
+          if (effectiveTypes.size !== 1) fail(roleId, 'role.type', [...effectiveTypes].join('/'), 'mixed')
+          if (effectiveShapes.size !== 1) fail(roleId, 'role.shape', [...effectiveShapes].join('/'), 'mixed')
+          const memberRows = rows.filter((row) => members.includes(row.id))
+          const fontSet = new Set(memberRows.map((row) => row.font))
+          const radiusSet = new Set(memberRows.map((row) => row.radius))
+          const strokeSet = new Set(memberRows.map((row) => row.stroke))
+          const padSet = new Set(memberRows.map((row) => row.pad))
+          const gapSet = new Set(memberRows.map((row) => row.gap))
+          const iconSet = new Set(memberRows.map((row) => row.icon))
+          if (fontSet.size !== 1) fail(roleId, 'role.font', [...fontSet].join('/'), 'mixed')
+          if (radiusSet.size !== 1) fail(roleId, 'role.radius', [...radiusSet].join('/'), 'mixed')
+          if (strokeSet.size !== 1) fail(roleId, 'role.stroke', [...strokeSet].join('/'), 'mixed')
+          if (padSet.size !== 1) fail(roleId, 'role.pad', [...padSet].join('/'), 'mixed')
+          if (gapSet.size !== 1) fail(roleId, 'role.gap', [...gapSet].join('/'), 'mixed')
+          if (iconSet.size !== 1) fail(roleId, 'role.icon', [...iconSet].join('/'), 'mixed')
+        }
+
+        const triples = ['button', 'card', 'input'].map((id) => {
+          const phone = expect(id, phoneCanvas)
+          const node = debug.build(id, phoneCanvas)
+          const row = rows.find((r) => r.id === id)
+          const root = document.querySelector(`[data-component-id="${id}"]`)
+          return `${id}: spec(${phone.font}/${phone.pad}/${phone.radius}) -> node(${node.fontSize}/${row.pad}/${node.radius}) -> rendered(${row.font}/${row.pad}/${row.radius})`
+        })
+        const svgDoc = {
+          id: 'spec-doc',
+          title: 'spec',
+          canvas: { width: 390, height: 844, background: '#FFFFFF', background2: '', radius: 0, deviceType: 'phone' },
+          nodes: ['button', 'card', 'input'].map((id, index) => {
+            const node = debug.build(id, phoneCanvas)
+            node.id = 'svg-' + id
+            node.x = 10
+            node.y = 10 + index * 120
+            return node
+          }),
+        }
+        const svg = debug.svg(svgDoc, { transparent: true })
+        const svgChecks = [
+          ['button.font', /font-size="23"/.test(svg)],
+          ['button.radius', /rx="20"/.test(svg)],
+          ['button.pad', /x="120"/.test(svg)],
+          ['card.font', /font-size="27"/.test(svg)],
+          ['card.radius', /rx="27"/.test(svg)],
+          ['card.pad', /x="24"/.test(svg)],
+          ['input.font', /font-size="21"/.test(svg)],
+          ['input.radius', /rx="20"/.test(svg)],
+          ['input.pad', /x="18"/.test(svg)],
+        ]
+        svgChecks.filter(([, ok]) => !ok).forEach(([key]) => fail('svg', key, 'present', 'missing'))
+        line('controlspec ids: ' + ids.length)
+        line('controlspec rows: ' + rows.length)
+        line('controlspec svg: ' + (svgChecks.length - svgChecks.filter(([, ok]) => !ok).length) + '/' + svgChecks.length)
+        line('controlspec failures: ' + failures.length)
+        failures.slice(0, 20).forEach((f) => line('controlspec FAIL ' + f))
+        triples.forEach((t) => line('controlspec chain ' + t))
+        line('controlspec roles: ' + [...roleGroups.entries()].map(([k, v]) => k + '=' + v.length).join(','))
+        line('controlspec errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+
+      if (stage === 'spec') {
+        const add = async (label) => {
+          const card = Array.from(document.querySelectorAll('.uid-comp-card')).find((el) => el.textContent.trim() === label)
+          if (!card) throw new Error('component card missing: ' + label)
+          click(card)
+          await wait(220)
+          const node = document.querySelector('.uid-node.is-selected')
+          if (!node) throw new Error('node not selected after adding ' + label)
+          const content = node.querySelector(':scope > div')
+          const textEl = content
+            ? Array.from(content.querySelectorAll('*')).find((el) => el.children.length === 0 && el.textContent.trim()) || content
+            : null
+          return {
+            node,
+            w: parseFloat(node.style.width),
+            h: parseFloat(node.style.height),
+            font: textEl ? parseFloat(getComputedStyle(textEl).fontSize) : 0,
+            pad: content ? parseFloat(getComputedStyle(content).paddingLeft) : 0,
+            radius: node.style.borderRadius,
+          }
+        }
+        const only = params.get('comp')
+        for (const label of only ? [only] : ['文本', '按钮', '输入框', '卡片', '图标']) {
+          const spec = await add(label)
+          line('spec ' + label + ': ' + JSON.stringify({ w: spec.w, h: spec.h, font: spec.font, pad: spec.pad, radius: spec.radius }))
+        }
+        line('spec errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'fontsize') {
+        const card = Array.from(document.querySelectorAll('.uid-comp-card')).find((el) => el.textContent.trim() === '文本')
+        if (!card) throw new Error('text component card missing')
+        click(card)
+        await wait(260)
+        const field = Array.from(document.querySelectorAll('.uid-field')).find((el) => (el.querySelector('.uid-field-label') || {}).textContent === '字号')
+        const range = field && field.querySelector('input[type="range"]')
+        const number = field && field.querySelector('input[type="number"]')
+        if (!range || !number) throw new Error('font size slider/number missing')
+        line('fontsize slider: ' + Boolean(range))
+        line('fontsize number: ' + Boolean(number))
+        line('fontsize range min: ' + range.min)
+        line('fontsize number min: ' + number.min)
+        const setInput = (input, value) => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+          setter.call(input, String(value))
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+        setInput(number, 4)
+        await wait(180)
+        const node = document.querySelector('.uid-node.is-selected')
+        const inner = node && node.querySelector('div')
+        line('fontsize typed 4: ' + field.querySelector('input[type="number"]').value)
+        line('fontsize rendered 4: ' + (inner ? getComputedStyle(inner).fontSize : 'none'))
+        setInput(range, 30)
+        await wait(180)
+        line('fontsize slider 30: ' + field.querySelector('input[type="range"]').value)
+        line('fontsize number 30: ' + field.querySelector('input[type="number"]').value)
+        line('fontsize rendered 30: ' + (inner ? getComputedStyle(inner).fontSize : 'none'))
+        const rowField = Array.from(document.querySelectorAll('.uid-field')).find((el) => (el.querySelector('.uid-field-label') || {}).textContent === '行高')
+        const row = rowField && rowField.parentElement
+        line('fontsize row overflow: ' + (row ? row.scrollWidth - row.clientWidth : 'none'))
+        const panel = document.querySelector('.uid-panel-scroll')
+        line('fontsize panel overflow: ' + (panel ? panel.scrollWidth - panel.clientWidth : 'none'))
+        if (field) field.scrollIntoView({ block: 'center' })
+        await wait(150)
+        line('fontsize errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'palette') {
+        const card = document.querySelector('[data-component-id="icon"]')
+        if (!card) throw new Error('icon component missing')
+        click(card)
+        await wait(260)
+        const colorField = Array.from(document.querySelectorAll('.uid-field')).find((el) => (el.querySelector('.uid-field-label') || {}).textContent === '颜色')
+        const paletteButton = colorField && colorField.querySelector('.uid-color-palette-btn')
+        if (!paletteButton) throw new Error('MD palette trigger missing')
+        click(paletteButton)
+        await wait(180)
+        const palette = colorField.querySelector('.uid-md-palette')
+        const swatches = colorField.querySelectorAll('.uid-md-swatch')
+        line('palette open: ' + Boolean(palette))
+        line('palette swatches: ' + swatches.length)
+        const red = Array.from(swatches).find((el) => (el.title || '').includes('#F44336'))
+        if (!red) throw new Error('MD red 500 swatch missing')
+        click(red)
+        await wait(220)
+        const selected = document.querySelector('.uid-node.is-selected')
+        const colorText = colorField.querySelector('.uid-color-text')
+        const iconSvg = selected && selected.querySelector('svg')
+        line('palette picked: ' + (colorText ? colorText.value : 'none'))
+        line('palette icon stroke: ' + (iconSvg ? iconSvg.getAttribute('stroke') : 'none'))
+        const trigger = document.querySelector('.uid-icon-trigger')
+        if (!trigger) throw new Error('visual icon trigger missing')
+        click(trigger)
+        await wait(180)
+        const cells = document.querySelectorAll('.uid-icon-grid .uid-icon-cell')
+        line('iconpicker open: ' + Boolean(document.querySelector('.uid-icon-grid')))
+        line('iconpicker cells: ' + cells.length)
+        const heart = document.querySelector('.uid-icon-grid .uid-icon-cell[title="heart"]')
+        if (!heart) throw new Error('heart icon candidate missing')
+        const beforePath = selected && selected.querySelector('svg') ? selected.querySelector('svg').innerHTML : ''
+        click(heart)
+        await wait(220)
+        const newTriggerName = document.querySelector('.uid-icon-trigger-name')
+        const afterPath = selected && selected.querySelector('svg') ? selected.querySelector('svg').innerHTML : ''
+        line('iconpicker picked: ' + (newTriggerName ? newTriggerName.textContent : 'none'))
+        line('iconpicker glyph changed: ' + (beforePath !== afterPath))
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        await wait(220)
+        line('palette canvas triggers: ' + document.querySelectorAll('.uid-color-palette-btn').length)
+        line('palette errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'iconpicker') {
+        const card = document.querySelector('[data-component-id="icon"]')
+        if (!card) throw new Error('icon component missing')
+        click(card)
+        await wait(260)
+        const trigger = document.querySelector('.uid-icon-trigger')
+        if (!trigger) throw new Error('visual icon trigger missing')
+        trigger.scrollIntoView({ block: 'center' })
+        click(trigger)
+        await wait(200)
+        const cells = document.querySelectorAll('.uid-icon-grid .uid-icon-cell')
+        line('iconpicker grid: ' + Boolean(document.querySelector('.uid-icon-grid')))
+        line('iconpicker candidates: ' + cells.length)
+        line('iconpicker selected: ' + (document.querySelector('.uid-icon-cell.is-active') || {}).title)
+        line('iconpicker errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'fontlink') {
+        const card = Array.from(document.querySelectorAll('.uid-comp-card')).find((el) => el.textContent.trim() === '文本')
+        if (!card) throw new Error('text component card missing')
+        click(card)
+        await wait(250)
+        const node = document.querySelector('.uid-node.is-selected')
+        if (!node) throw new Error('added text node was not selected')
+        const inner = node.querySelector('div')
+        const before = parseFloat(getComputedStyle(inner).fontSize)
+        const handle = document.querySelector('.uid-sel-handle[data-handle="se"]')
+        if (!handle) throw new Error('southeast handle missing')
+        const hr = handle.getBoundingClientRect()
+        const startX = hr.left + hr.width / 2
+        const startY = hr.top + hr.height / 2
+        handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: startX, clientY: startY, button: 0, pointerId: 11, pointerType: 'mouse' }))
+        window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: startX + 80, clientY: startY + 60, button: 0, pointerId: 11, pointerType: 'mouse' }))
+        window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: startX + 80, clientY: startY + 60, button: 0, pointerId: 11, pointerType: 'mouse' }))
+        await wait(200)
+        const after = parseFloat(getComputedStyle(node.querySelector('div')).fontSize)
+        line('fontlink before: ' + before)
+        line('fontlink after: ' + after)
+        line('fontlink ratio: ' + (after / before).toFixed(3))
+        line('fontlink errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'textedit') {
+        const nodes = Array.from(document.querySelectorAll('.uid-node'))
+        const target = nodes.find((el) => el.textContent.includes('早上好'))
+        if (!target) throw new Error('text node missing')
+        target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }))
+        await wait(300)
+        const editor = document.querySelector('.uid-text-editor')
+        line('inline editor: ' + Boolean(editor))
+        if (editor) {
+          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+          setter.call(editor, '晚上好，Luna')
+          editor.dispatchEvent(new Event('input', { bubbles: true }))
+          await wait(100)
+          editor.blur()
+          await wait(300)
+          line('inline committed: ' + document.body.textContent.includes('晚上好，Luna'))
+        }
+        line('textedit errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'library') {
+        const fileButton = document.querySelector('.uid-file-btn')
+        if (fileButton) click(fileButton)
+        await wait(500)
+        line('library dialog: ' + Boolean(document.querySelector('.uid-library-modal')))
+        line('workspace select in dialog: ' + Boolean(document.querySelector('.uid-library-modal .uid-workspace-select')))
+        line('DONE')
+        return
+      }
+      if (stage === 'preview') {
+        const openPreview = Array.from(document.querySelectorAll('[title]')).find((el) => el.title.includes('预览'))
+        if (openPreview) click(openPreview)
+        await wait(500)
+        line('preview overlay: ' + Boolean(document.querySelector('.uid-preview-overlay')))
+        line('DONE')
+        return
+      }
+      if (stage === 'clean') {
+        await wait(3600)
+        line('DONE')
+        return
+      }
+      if (stage === 'editor') {
+        const saveBtn = document.querySelector('.uid-save-btn')
+        if (saveBtn) {
+          const svg = saveBtn.querySelector('svg')
+          const cs = getComputedStyle(saveBtn)
+          const sc = svg ? getComputedStyle(svg) : null
+          line('save button color: ' + cs.color + ' bg:' + cs.backgroundColor + ' w:' + saveBtn.getBoundingClientRect().width)
+          if (svg) line('save icon color: ' + sc.color + ' display:' + sc.display + ' rect:' + JSON.stringify(svg.getBoundingClientRect()))
+        }
+        const bar = document.querySelector('.uid-topbar')
+        const title = document.querySelector('.uid-title-wrap')
+        const actions = document.querySelector('.uid-topbar-actions')
+        line('bar rect: ' + JSON.stringify(bar.getBoundingClientRect()))
+        line('title rect: ' + JSON.stringify(title.getBoundingClientRect()))
+        line('actions rect: ' + JSON.stringify(actions.getBoundingClientRect()))
+        line('actions children: ' + Array.from(actions.children).map((el) => el.className + ':' + Math.round(el.getBoundingClientRect().width) + '@' + Math.round(el.getBoundingClientRect().left)).join('|'))
+        line('DONE'); return
+      }
+      if (stage === 'interactions') {
+        const first = document.querySelector('.uid-node')
+        let rect = first.getBoundingClientRect()
+        const startStyle = first.getAttribute('style')
+        const posOf = (el) => { const st = el.getAttribute('style') || ''; return (st.match(/left: ([^;]+)/) || [])[1] + ',' + (st.match(/top: ([^;]+)/) || [])[1] + ',' + (st.match(/width: ([^;]+)/) || [])[1] + ',' + (st.match(/height: ([^;]+)/) || [])[1] }
+        const startPos = posOf(first)
+        first.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 20, button: 0, pointerId: 3, pointerType: 'mouse' }))
+        window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: rect.left + 52, clientY: rect.top + 48, button: 0, pointerId: 3, pointerType: 'mouse' }))
+        window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: rect.left + 52, clientY: rect.top + 48, button: 0, pointerId: 3, pointerType: 'mouse' }))
+        await wait(150)
+        line('drag changed style: ' + (first.getAttribute('style') !== startStyle))
+        line('drag box: ' + (document.querySelector('.uid-selection') ? document.querySelector('.uid-selection').getAttribute('style') : 'none'))
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }))
+        await wait(120)
+        line('undo restored: ' + (posOf(first) === startPos))
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }))
+        await wait(120)
+        line('redo changed: ' + (posOf(first) !== startPos))
+
+        const handle = document.querySelector('.uid-sel-handle[data-handle="se"]')
+        if (handle) {
+          rect = handle.getBoundingClientRect()
+          const before = first.getAttribute('style')
+          handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: rect.left + 2, clientY: rect.top + 2, button: 0, pointerId: 5, pointerType: 'mouse' }))
+          window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: rect.left + 36, clientY: rect.top + 36, button: 0, pointerId: 5, pointerType: 'mouse' }))
+          window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: rect.left + 36, clientY: rect.top + 36, button: 0, pointerId: 5, pointerType: 'mouse' }))
+          await wait(150)
+          line('resize changed: ' + (first.getAttribute('style') !== before))
+        } else line('resize handle missing')
+
+        const rotate = document.querySelector('.uid-rotate-handle')
+        if (rotate) {
+          rect = rotate.getBoundingClientRect()
+          rotate.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.top + 5, button: 0, pointerId: 7, pointerType: 'mouse' }))
+          window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: rect.left + 50, clientY: rect.top + 30, button: 0, pointerId: 7, pointerType: 'mouse' }))
+          window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: rect.left + 50, clientY: rect.top + 30, button: 0, pointerId: 7, pointerType: 'mouse' }))
+          await wait(150)
+          line('rotation applied: ' + /rotate\(/.test(first.getAttribute('style') || ''))
+        } else line('rotation handle missing')
+        line('interaction errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'presets') {
+        const select = document.querySelector('.uid-inspector select')
+        if (!select) throw new Error('canvas preset select missing')
+        const values = Array.from(select.options).map((option) => option.value)
+        for (const value of values) {
+          select.value = value
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+          await wait(60)
+        }
+        await wait(200)
+        line('preset count: ' + values.length)
+        line('preset final: ' + (document.querySelector('.uid-stage-info') ? document.querySelector('.uid-stage-info').textContent : 'none'))
+        line('preset nodes: ' + document.querySelectorAll('.uid-node').length)
+        line('preset errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+      if (stage === 'components') {
+        const cards = Array.from(document.querySelectorAll('.uid-comp-card'))
+        const before = document.querySelectorAll('.uid-node').length
+        for (const card of cards) {
+          click(card)
+          await wait(30)
+        }
+        await wait(400)
+        line('component cards clicked: ' + cards.length)
+        line('nodes after all components: ' + document.querySelectorAll('.uid-node').length)
+        line('component errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+        line('DONE')
+        return
+      }
+
+      // Select the first node by clicking its center.
+      const node = document.querySelector('.uid-node')
+      const rect = node.getBoundingClientRect()
+      node.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.top + 5, button: 0, pointerId: 1, pointerType: 'mouse' }))
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.top + 5, button: 0, pointerId: 1, pointerType: 'mouse' }))
+      await wait(120)
+      line('selection overlay: ' + Boolean(document.querySelector('.uid-selection')))
+      line('inspector sections: ' + document.querySelectorAll('.uid-inspector .uid-section').length)
+
+      // Add a component from the library.
+      const beforeAdd = document.querySelectorAll('.uid-node').length
+      const comp = document.querySelector('.uid-comp-card')
+      click(comp)
+      await wait(200)
+      line('component added: ' + (document.querySelectorAll('.uid-node').length > beforeAdd))
+      line('toast: ' + (document.querySelector('.uid-toast') ? document.querySelector('.uid-toast').textContent : 'none'))
+
+      await wait(2100)
+      line('autosaved: ' + Boolean(savedPayload))
+      if (savedPayload) line('saved node count: ' + savedPayload.document.nodes.length)
+
+      // Open export dialog, request workspace SVG save.
+      const exportButton = Array.from(document.querySelectorAll('.uid-btn-accent')).find((el) => el.offsetParent !== null)
+      if (exportButton) {
+        click(exportButton)
+        await wait(250)
+        line('export dialog: ' + Boolean(document.querySelector('.uid-export-modal')))
+        const svgCard = Array.from(document.querySelectorAll('.uid-format-card')).find((el) => el.textContent.includes('SVG'))
+        if (svgCard) click(svgCard)
+        await wait(100)
+        const saveButton = Array.from(document.querySelectorAll('.uid-export-actions .uid-btn-primary'))[0]
+        if (saveButton) {
+          click(saveButton)
+          await wait(600)
+          if (exportPayload && exportPayload.format === 'svg') svgPayload = exportPayload.data
+          line('export saved: ' + Boolean(exportPayload))
+          if (exportPayload) line('export format: ' + exportPayload.format + ' bytes:' + String(exportPayload.data).length)
+        }
+        const closeButton = document.querySelector('.uid-export-modal .uid-iconbtn')
+        if (closeButton) click(closeButton)
+        await wait(100)
+        // PNG export exercises the SVG rasterizer and base64 transport.
+        if (exportButton && window.innerWidth >= 1000) {
+          click(exportButton)
+          await wait(250)
+          const pngSave = Array.from(document.querySelectorAll('.uid-export-actions .uid-btn-primary'))[0]
+          if (pngSave) {
+            click(pngSave)
+            await wait(1600)
+            line('png export: ' + Boolean(exportPayload && exportPayload.format === 'png'))
+            if (exportPayload && exportPayload.format === 'png') {
+              line('png base64 bytes: ' + Math.round(String(exportPayload.data).length * 0.75))
+              line('png header: ' + atob(exportPayload.data).slice(0, 4).split('').map((c) => c.charCodeAt(0).toString(16)).join(' '))
+            }
+          }
+          const pngClose = document.querySelector('.uid-export-modal .uid-iconbtn')
+          if (pngClose) click(pngClose)
+          await wait(100)
+        }
+      } else {
+        line('export button: not visible')
+      }
+
+      // Preview overlay.
+      const previewButton = Array.from(document.querySelectorAll('[title]')).find((el) => el.title.includes('预览'))
+      if (previewButton) {
+        click(previewButton)
+        await wait(250)
+        line('preview overlay: ' + Boolean(document.querySelector('.uid-preview-overlay')))
+        const closePreview = Array.from(document.querySelectorAll('.uid-preview-overlay .uid-btn-quiet'))[0]
+        if (closePreview) click(closePreview)
+      } else {
+        line('preview button: not found')
+      }
+
+      // Compact/mobile controls.
+      if (window.innerWidth < 1000) {
+        line('compact mode: ' + Boolean(document.querySelector('.uid-root.is-compact')))
+        const tools = Array.from(document.querySelectorAll('.uid-mobile-tool'))
+        line('mobile tools: ' + tools.length)
+        if (tools[0]) {
+          click(tools[0])
+          await wait(200)
+          line('mobile components sheet: ' + Boolean(document.querySelector('.uid-rail.is-mobile-open')))
+          const scrim = document.querySelector('.uid-mobile-scrim')
+          if (scrim) click(scrim)
+        }
+      }
+      if (stage === 'svg' && svgPayload) {
+        document.getElementById('app').innerHTML = '<img id="svg-preview" style="display:block;margin:20px auto;max-width:calc(100vw - 40px);max-height:calc(100vh - 40px);box-shadow:0 20px 60px rgba(0,0,0,.2)" />'
+        document.getElementById('svg-preview').src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgPayload)))
+        document.getElementById('results').style.display = 'none'
+        line('svg rendered')
+        return
+      }
+      line('rpc calls: ' + Array.from(new Set(rpcCalls)).join(','))
+      line('errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+      line('DONE')
+    }
+
+    main().catch((error) => {
+      line('FATAL: ' + String(error && error.stack || error))
+      line('errors: ' + (errors.length ? errors.join(' | ') : 'none'))
+    })
+  </script>
+</body>
+</html>
